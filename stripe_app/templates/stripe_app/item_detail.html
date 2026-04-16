@@ -1,23 +1,157 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Buy {{ item.name }}</title>
     <script src="https://js.stripe.com/v3/"></script>
+    <style>
+        .StripeElement {
+            margin: 20px 0;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: opacity 0.3s;
+        }
+
+            button:disabled {
+                background-color: #ccc;
+                cursor: not-allowed;
+            }
+
+        #payment-message {
+            margin-top: 20px;
+            color: #df1b41;
+            font-size: 14px;
+            min-height: 20px;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
 </head>
 <body>
     <h1>{{ item.name }}</h1>
     <p>{{ item.description }}</p>
-    <p>Price: {{ item.price }} {{ item.currency|upper }}</p>
-    <button id="buy-button">Buy</button>
+    <p>Цена: <strong>{{ item.price }} {{ item.currency|upper }}</strong></p>
+
+    <form id="payment-form">
+        <div id="payment-element">
+            <!-- сюда Stripe вставит форму оплаты -->
+        </div>
+        <button id="submit-button" disabled>
+            <span id="button-spinner" class="spinner hidden"></span>
+            <span id="button-text">Loading...</span>
+        </button>
+        <div id="payment-message"></div>
+    </form>
 
     <script>
-        var stripe = Stripe('{{ stripe_public_key }}');
-        var buyButton = document.getElementById('buy-button');
-        buyButton.addEventListener('click', function() {
-            fetch('/buy/{{ item.id }}/', {method: 'GET'})
-                .then(response => response.json())
-                .then(session => stripe.redirectToCheckout({ sessionId: session.id }));
+        const stripe = Stripe('{{ stripe_public_key }}');
+        const submitButton = document.getElementById('submit-button');
+        const buttonText = document.getElementById('button-text');
+        const buttonSpinner = document.getElementById('button-spinner');
+        const messageDiv = document.getElementById('payment-message');
+
+        let elements, paymentElement;
+
+        async function initialize() {
+            try {
+                const response = await fetch('/create-payment-intent/{{ item.id }}/');
+
+                if (!response.ok) {
+                    throw new Error('Не удалось получить Client Secret от сервера.');
+                }
+
+                const { clientSecret } = await response.json();
+                elements = stripe.elements({ clientSecret, locale: 'ru' });
+
+
+                paymentElement = elements.create('payment');
+
+                paymentElement.on('ready', () => {
+                    submitButton.disabled = false;
+                    buttonText.textContent = 'Оплатить сейчас';
+                });
+
+                paymentElement.mount('#payment-element');
+
+            } catch (error) {
+                console.error("Ошибка инициализации:", error);
+                messageDiv.textContent = "Не удалось загрузить форму оплаты. Пожалуйста, обновите страницу.";
+                buttonText.textContent = "Ошибка загрузки";
+            }
+
+        }
+
+
+
+
+        initialize();
+
+        submitButton.addEventListener('click', async (e) => {
+            e.preventDefault();
+
+            setLoading(true);
+            messageDiv.textContent = '';
+
+            const { error } = await stripe.confirmPayment({
+                elements,
+                confirmParams: {
+                    return_url: window.location.origin + '/payment-success/',
+                },
+            });
+
+            if (error) {
+                if (error.type === "card_error" || error.type === "validation_error") {
+                    messageDiv.textContent = error.message;
+                } else {
+                    messageDiv.textContent = "Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже..";
+                }
+                setLoading(false);
+            }
         });
+
+
+
+
+
+        function setLoading(isLoading) {
+            submitButton.disabled = isLoading;
+            buttonSpinner.classList.toggle('hidden', !isLoading);
+            if (isLoading) {
+                buttonText.textContent = 'Ожидайте...';
+            } else {
+                buttonText.textContent = 'Купить сейчас';
+            }
+        }
     </script>
 </body>
 </html>

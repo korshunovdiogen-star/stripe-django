@@ -10,7 +10,7 @@ def get_stripe_api_key(currency):
     return settings.STRIPE_KEYS.get(currency, {}).get('secret')
 
 def item_detail(request, id):
-    """Страница товара с кнопкой Buy."""
+    """Страница товара"""
     item = get_object_or_404(Item, id=id)
     public_key = settings.STRIPE_KEYS.get(item.currency, {}).get('public')
     return render(request, 'stripe_app/item_detail.html', {
@@ -35,7 +35,6 @@ def buy_item(request, id):
 def order_detail(request, id):
     """Страница заказа с кнопкой Buy."""
     order = get_object_or_404(Order, id=id)
-    # Предположим, что все товары в заказе имеют одинаковую валюту
     currency = order.items.first().currency if order.items.exists() else 'usd'
     public_key = settings.STRIPE_KEYS.get(currency, {}).get('public')
     return render(request, 'stripe_app/order_detail.html', {
@@ -62,13 +61,50 @@ def buy_order(request, id):
         'cancel_url': request.build_absolute_uri('/cancel/'),
     }
     
-    # Добавляем скидку, если есть
     if order.discount and order.discount.stripe_coupon_id:
         session_params['discounts'] = [{'coupon': order.discount.stripe_coupon_id}]
     
-    # Добавляем налог, если есть
     if order.tax and order.tax.stripe_tax_rate_id:
         session_params['tax_rates'] = [order.tax.stripe_tax_rate_id]
     
     session = stripe.checkout.Session.create(**session_params)
     return JsonResponse({'id': session.id})
+
+
+
+
+
+
+
+
+
+def create_payment_intent(request, id):
+    """Создаёт PaymentIntent для товара и возвращает client_secret"""
+    item = get_object_or_404(Item, id=id)
+    stripe.api_key = get_stripe_api_key(item.currency)
+    
+    intent = stripe.PaymentIntent.create(
+        amount=item.price,
+        currency=item.currency,
+        metadata={'item_id': item.id, 'item_name': item.name},
+    )
+    return JsonResponse({'clientSecret': intent.client_secret})
+
+
+def create_order_payment_intent(request, id):
+    """Создаёт PaymentIntent для заказа с учётом скидки и налога."""
+    order = get_object_or_404(Order, id=id)
+    if not order.items.exists():
+        return JsonResponse({'error': 'Order has no items'}, status=400)
+    
+    currency = order.items.first().currency
+    stripe.api_key = get_stripe_api_key(currency)
+    
+    total_amount = order.get_total_with_tax()
+    
+    intent = stripe.PaymentIntent.create(
+        amount=total_amount,
+        currency=currency,
+        metadata={'order_id': order.id},
+    )
+    return JsonResponse({'clientSecret': intent.client_secret})
